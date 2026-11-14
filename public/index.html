@@ -274,6 +274,20 @@ body.dark .tf-head h1 small{color:#8fb3dc}
 body.dark .tf-sub{color:#c3d2e6}
 body.dark .tf-link{color:#7dd3fc}
 body.dark .tbtn{box-shadow:0 4px 12px rgba(0,0,0,.3)}
+/* ===== Nút đồng bộ server ===== */
+#syncBtn{display:inline-flex;align-items:center;gap:6px;position:relative}
+#syncBtn .sic{font-size:14px;line-height:1}
+#syncBtn .sdot{width:8px;height:8px;border-radius:50%;background:#98a2b3;box-shadow:0 0 0 2px rgba(255,255,255,.25)}
+#syncBtn.sync-ok .sdot{background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.3)}
+#syncBtn.sync-pending .sdot{background:#f59e0b;animation:spulse 1.2s infinite}
+#syncBtn.sync-busy .sic{display:inline-block;animation:sspin 1s linear infinite}
+#syncBtn.sync-busy .sdot{background:#38bdf8}
+#syncBtn.sync-ro .sdot{background:#60a5fa}
+#syncBtn.sync-err{border-color:#f87171!important}
+#syncBtn.sync-err .sdot{background:#ef4444}
+@keyframes sspin{to{transform:rotate(360deg)}}
+@keyframes spulse{50%{opacity:.35}}
+@media print{#syncBtn{display:none}}
 </style>
 </head>
 <body>
@@ -282,6 +296,7 @@ body.dark .tbtn{box-shadow:0 4px 12px rgba(0,0,0,.3)}
   <div class="hdr-r">
     <div id="savedInfo"></div>
     <select id="daySelMini" hidden="" title="Ngày báo cáo"></select>
+    <button class="hbtn" id="syncBtn">☁ Server</button>
     <button class="hbtn" id="themeBtn" title="Chuyển giao diện Sáng / Tối">🌙 Dark</button>
     <button class="hbtn" id="toggleTools" title="Ẩn/hiện các thanh chức năng">▴ Ẩn chức năng</button>
     <div class="viewmenu">
@@ -1501,6 +1516,79 @@ try{applyTheme(localStorage.getItem(TKEY)==='dark',false)}catch(e){}
 load();
 render();
 applyView();
+/* ================= ĐỒNG BỘ SERVER (Cloudflare KV) ================= */
+const SYNC_API='/api/data',SKEY='ngErpReport_writeKey',SNAME='ngErpReport_syncName',SVKEY='ngErpReport_syncV';
+const SYNC={v:null,state:'off',dirty:false,busy:false,last:0,msg:'',enabled:location.protocol.startsWith('http')};
+try{const v=localStorage.getItem(SVKEY);if(v!=null)SYNC.v=+v}catch(e){}
+const wkey=()=>{try{return localStorage.getItem(SKEY)||''}catch(e){return''}};
+function syncUI(state,msg){
+  if(state)SYNC.state=state;if(msg!==undefined)SYNC.msg=msg;
+  const b=$('syncBtn');if(!b)return;
+  const T={ok:['☁','Đã đồng bộ'],busy:['↻','Đang đồng bộ…'],pending:['☁','Chờ đồng bộ'],ro:['☁','Chỉ xem'],err:['⚠','Lỗi đồng bộ'],off:['☁','Chưa có server']}[SYNC.state];
+  b.className='hbtn sync-'+SYNC.state;
+  const tm=SYNC.last?' '+new Date(SYNC.last).toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'}):'';
+  b.innerHTML=`<span class="sic">${T[0]}</span><span class="sdot"></span>${T[1]}${SYNC.state==='ok'?tm:''}`;
+  b.title=(SYNC.msg?SYNC.msg+'\n':'')+(SYNC.enabled?`Server: ${location.host}${SYNC.v!=null?' · phiên bản v'+SYNC.v:''}\n`+(wkey()?'Đã nhập mã ghi – thay đổi sẽ tự đẩy lên server':'Chưa nhập mã ghi – chỉ xem. Bấm để nhập mã ghi'):'Đang mở file cục bộ – mở qua link Cloudflare để đồng bộ');
+}
+async function syncPull(force){
+  if(!SYNC.enabled)return;
+  try{
+    const mr=await fetch(SYNC_API+'?meta=1',{cache:'no-store'});if(!mr.ok)throw new Error((await mr.json().catch(()=>({}))).error||('HTTP '+mr.status));
+    const meta=await mr.json();
+    if(!force&&meta.v===SYNC.v&&(meta.savedAt||0)===(S.savedAt||0)){SYNC.last=Date.now();syncUI(SYNC.dirty?'pending':wkey()?'ok':'ro');return}
+    if(!meta.v){SYNC.v=0;if(wkey()){SYNC.dirty=true;syncPush()}else syncUI('ro','Server chưa có dữ liệu');return}
+    const r=await fetch(SYNC_API,{cache:'no-store'});const d=await r.json();
+    SYNC.v=d.v;try{localStorage.setItem(SVKEY,SYNC.v)}catch(e){}
+    const sa=(d.data&&d.data.savedAt)||0,la=S.savedAt||0;
+    if(d.data&&d.data.models&&sa>la){
+      if(SYNC.dirty){try{snapshot('Bản trên máy trước khi nhận dữ liệu server')}catch(e){}}
+      S=d.data;try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}
+      render();if(typeof applyView==='function')applyView();showSaved();SYNC.dirty=false;
+      toast(`☁ Đã nhận dữ liệu mới từ server (v${d.v}${d.by?' · '+d.by:''})`);
+    }else if(la>sa){
+      if(wkey()){SYNC.dirty=true;return syncPush()}
+      SYNC.last=Date.now();return syncUI('ro','Bản đang mở mới hơn server · nhập mã ghi để đẩy lên');
+    }else SYNC.dirty=false;
+    SYNC.last=Date.now();syncUI(SYNC.dirty?'pending':wkey()?'ok':'ro','');
+  }catch(e){syncUI('err','Không kết nối được server: '+e.message)}
+}
+let syncT;
+function syncPush(){
+  if(!SYNC.enabled)return;
+  if(!wkey()){syncUI('ro','Có thay đổi trên máy nhưng chưa nhập mã ghi nên chưa đẩy lên server');return}
+  clearTimeout(syncT);syncT=setTimeout(async()=>{
+    if(SYNC.busy){syncPush();return}
+    SYNC.busy=true;syncUI('busy');
+    try{
+      const name=(()=>{try{return localStorage.getItem(SNAME)||''}catch(e){return''}})();
+      const r=await fetch(SYNC_API,{method:'PUT',headers:{'content-type':'application/json','x-write-key':wkey()},body:JSON.stringify({base:SYNC.v,by:name,data:S})});
+      const d=await r.json().catch(()=>({}));
+      if(r.status===409){SYNC.busy=false;toast('☁ Server có bản mới hơn – đang tải về (bản trên máy được lưu trong Lịch sử phiên bản)');try{snapshot('Bản trên máy bị trùng khi đồng bộ')}catch(e){}SYNC.dirty=false;return syncPull(true)}
+      if(r.status===401){try{localStorage.removeItem(SKEY)}catch(e){}throw new Error('Sai mã ghi – bấm biểu tượng server để nhập lại')}
+      if(!r.ok)throw new Error(d.error||('HTTP '+r.status));
+      SYNC.v=d.v;SYNC.dirty=false;SYNC.last=Date.now();try{localStorage.setItem(SVKEY,SYNC.v)}catch(e){}
+      syncUI('ok','');
+    }catch(e){syncUI('err','Đẩy lên server thất bại: '+e.message)}
+    SYNC.busy=false;
+  },1500);
+  syncUI('pending');
+}
+const _saveLocal=save;
+save=function(msg){_saveLocal(msg);if(SYNC.enabled&&!SYNC.applying){SYNC.dirty=true;syncPush()}};
+$('syncBtn').onclick=()=>{
+  if(!SYNC.enabled){alert('Đồng bộ server chỉ hoạt động khi mở báo cáo qua link Cloudflare (https://…pages.dev).\nFile đang mở trực tiếp trên máy nên chỉ lưu trong trình duyệt này.');return}
+  modal('☁ Đồng bộ server',`
+    <div style="font-size:13px;line-height:1.6">Trạng thái: <b>${SYNC.msg||{ok:'Đã đồng bộ',pending:'Chờ đồng bộ',ro:'Chỉ xem',err:'Lỗi',busy:'Đang đồng bộ',off:'—'}[SYNC.state]}</b><br>
+    Server: <code>${location.host}</code> · phiên bản <b>v${SYNC.v??'–'}</b>${SYNC.last?' · kiểm tra lúc '+new Date(SYNC.last).toLocaleTimeString('vi-VN'):''}</div>
+    <label>Mã ghi (để cập nhật dữ liệu lên server · người chỉ xem để trống)</label><input id="skIn" type="password" value="${esc(wkey())}" placeholder="Nhập mã ghi do quản trị cấp">
+    <label>Tên người cập nhật (hiện cho người khác khi nhận dữ liệu)</label><input id="snIn" value="${esc((()=>{try{return localStorage.getItem(SNAME)||''}catch(e){return''}})())}" placeholder="VD: Mỹ Hạnh">`,
+  [{label:'⤓ Tải từ server',fn:()=>{syncPull(true)}},
+   {label:'⤒ Đẩy bản này lên',cls:'sr',fn:()=>{const k=$('skIn').value.trim();if(!k){alert('Cần mã ghi');return false}try{localStorage.setItem(SKEY,k);localStorage.setItem(SNAME,$('snIn').value.trim())}catch(e){}if(!confirm('Ghi đè dữ liệu trên server bằng dữ liệu đang mở trên máy này?'))return false;SYNC.v=null;SYNC.dirty=true;syncPush()}},
+   {label:'Lưu',cls:'navy',fn:()=>{try{const k=$('skIn').value.trim();k?localStorage.setItem(SKEY,k):localStorage.removeItem(SKEY);localStorage.setItem(SNAME,$('snIn').value.trim())}catch(e){}SYNC.dirty?syncPush():syncPull();syncUI()}}]);
+};
+syncUI(SYNC.enabled?'busy':'off');
+if(SYNC.enabled){syncPull();setInterval(()=>{if(!SYNC.busy&&document.visibilityState==='visible')syncPull()},45000);
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&!SYNC.busy)syncPull()})}
 document.querySelector('.tabs button[data-tab="cum"]').click();
 if(SEEDMSG)setTimeout(()=>toast(SEEDMSG),400);
 </script></body></html>

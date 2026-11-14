@@ -8,7 +8,7 @@ Trang báo cáo NG ERP: Tổng quan lũy kế · Báo cáo ngày · Hiệu quả
 public/index.html              # báo cáo (đã kèm dữ liệu đến 10/11/2026)
 public/_headers                # Cloudflare: không cache index.html → cập nhật hiện ngay
 .github/workflows/deploy.yml   # tự deploy lên Cloudflare Pages mỗi lần push lên main
-wrangler.toml                  # cấu hình Cloudflare Pages
+functions/api/data.js          # API đồng bộ dữ liệu (Cloudflare KV)
 update.bat                     # Windows: lấy file HTML mới nhất trong Downloads → push
 ```
 
@@ -51,3 +51,19 @@ Cloudflare → **Zero Trust → Access → Applications → Add (Self-hosted)** 
 ## Lưu ý
 - Dữ liệu nhập trên trang web chỉ lưu trong **trình duyệt của từng người** (localStorage). Muốn mọi người cùng thấy, phải tải HTML mới nhất rồi push lại như trên.
 - Thư viện Chart.js và SheetJS tải từ CDN, nên máy xem cần có Internet.
+
+## ☁ Đồng bộ server (nút "Đã đồng bộ" trên thanh tiêu đề)
+Dữ liệu được lưu chung trên Cloudflare KV: ai mở link cũng thấy bản mới nhất, và chỉ người có **mã ghi** mới cập nhật được.
+
+**Thiết lập một lần trên Cloudflare:**
+1. **Storage & Databases → KV → Create namespace**, đặt tên `ng-erp-data`.
+2. Vào project **ng-erp-report → Settings → Bindings → Add → KV namespace**: Variable name `NG_KV`, chọn namespace `ng-erp-data` → Save.
+3. **Settings → Variables and Secrets → Add**: Type **Secret**, Name `WRITE_KEY`, Value = mã ghi tự đặt (VD `QC@2026!`) → Save.
+4. **Deployments → (bản mới nhất) → ⋯ → Retry deployment** để áp dụng cấu hình.
+
+**Sử dụng:**
+- Người cập nhật bấm nút **☁** trên thanh tiêu đề → nhập **Mã ghi** + tên → **Lưu**. Từ đó mọi thay đổi (upload Excel, sửa số, mục tiêu…) tự đẩy lên server sau khoảng 1–2 giây.
+- Người xem không cần nhập gì; trang tự kiểm tra bản mới khoảng mỗi 45 giây và mỗi lần quay lại tab.
+- Trạng thái nút: 🟢 Đã đồng bộ · 🟠 Chờ đồng bộ · 🔵 Chỉ xem · 🔴 Lỗi (rê chuột để xem lý do).
+- Nếu hai người sửa cùng lúc, bản sau sẽ nhận dữ liệu server và lưu bản trên máy vào **Lịch sử phiên bản**.
+- Khi mở file HTML trực tiếp trên máy (không qua link), nút sẽ báo "Chưa có server": dữ liệu khi đó chỉ lưu trong trình duyệt.
